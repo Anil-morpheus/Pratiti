@@ -1,1 +1,7 @@
 streamlit
+openai
+requests
+pandas
+
+
+Added openai module to fix missing dependency
