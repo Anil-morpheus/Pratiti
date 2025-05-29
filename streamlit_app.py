@@ -1,7 +1,7 @@
 # pratiti_mvp_app.py
 
 import streamlit as st
-import openai
+import requests
 import os
 import textwrap
 import traceback
@@ -13,10 +13,6 @@ import re
 st.set_page_config(page_title="Pratiti - Business Insight Engine")
 st.title("Pratiti")
 st.markdown("Paste a business news article to generate contextual insights and supporting research links.")
-
-# Load OpenRouter API key
-openai.api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
-openai.api_base = "https://openrouter.ai/api/v1"
 
 # Paths
 INSIGHT_DB_PATH = "insights.json"
@@ -33,6 +29,23 @@ def save_insight(entry):
     insights.append(entry)
     with open(INSIGHT_DB_PATH, "w") as f:
         json.dump(insights, f, indent=2)
+
+# --- Utility: Query OpenRouter API ---
+def query_openrouter(prompt, role_description="You are a helpful assistant."):
+    headers = {
+        "Authorization": f"Bearer {st.secrets.get('OPENROUTER_API_KEY', os.getenv('OPENROUTER_API_KEY'))}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "anthropic/claude-3-haiku",
+        "messages": [
+            {"role": "system", "content": role_description},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
 
 # --- Input: Paste Text Only ---
 article_text = st.text_area("Paste the full article text:", height=300)
@@ -110,15 +123,7 @@ sentiment = ""
 if article_text:
     try:
         sentiment_prompt = generate_sentiment_prompt(article_text)
-        sentiment_response = openai.ChatCompletion.create(
-            model="anthropic/claude-3-haiku",
-            messages=[
-                {"role": "system", "content": "You are a sentiment classifier."},
-                {"role": "user", "content": sentiment_prompt}
-            ],
-            temperature=0.2
-        )
-        sentiment = sentiment_response["choices"][0]["message"]["content"].strip()
+        sentiment = query_openrouter(sentiment_prompt, role_description="You are a sentiment classifier.")
     except:
         sentiment = "Error detecting sentiment."
 
@@ -133,59 +138,27 @@ if article_text and st.button("Generate Insight with Research"):
     with st.spinner("Running research agent and generating insights..."):
         try:
             research_prompt = generate_research_prompt(article_text)
-            research_response = openai.ChatCompletion.create(
-                model="anthropic/claude-3-haiku",
-                messages=[
-                    {"role": "system", "content": "You are a research analyst helping senior executives."},
-                    {"role": "user", "content": research_prompt}
-                ],
-                temperature=0.4
-            )
-            research_output = research_response["choices"][0]["message"]["content"].strip()
+            research_output = query_openrouter(research_prompt, role_description="You are a research analyst helping senior executives.")
 
             tag_prompt = generate_tag_prompt(article_text)
-            tag_response = openai.ChatCompletion.create(
-                model="anthropic/claude-3-haiku",
-                messages=[
-                    {"role": "system", "content": "You are a tagging assistant."},
-                    {"role": "user", "content": tag_prompt}
-                ],
-                temperature=0.3
-            )
-            tags = [tag.strip() for tag in tag_response["choices"][0]["message"]["content"].split(",")]
+            tags_response = query_openrouter(tag_prompt, role_description="You are a tagging assistant.")
+            tags = [tag.strip() for tag in tags_response.split(",")]
 
             insight_prompt = generate_prompt(article_text, research_context=research_output)
-            insight_response = openai.ChatCompletion.create(
-                model="anthropic/claude-3-haiku",
-                messages=[
-                    {"role": "system", "content": "You are a financial research assistant."},
-                    {"role": "user", "content": insight_prompt}
-                ],
-                temperature=0.7
-            )
+            insight = query_openrouter(insight_prompt, role_description="You are a financial research assistant.")
 
-            insight = insight_response["choices"][0]["message"]["content"].strip()
             insight_lines = insight.split("\n")
             why_matters = insight_lines[0] if insight_lines else "N/A"
             full_insight = "\n".join(insight_lines)
 
             explanation_prompt = generate_explanation_prompt(full_insight)
-            explanation_response = openai.ChatCompletion.create(
-                model="anthropic/claude-3-haiku",
-                messages=[
-                    {"role": "system", "content": "You explain AI-generated insights clearly."},
-                    {"role": "user", "content": explanation_prompt}
-                ],
-                temperature=0.5
-            )
-            explanation = explanation_response["choices"][0]["message"]["content"].strip()
+            explanation = query_openrouter(explanation_prompt, role_description="You explain AI-generated insights clearly.")
 
             st.subheader("Why This Matters")
             st.write(why_matters)
 
             st.subheader("Full Insight")
             keywords = tags + ["growth", "inflation", "fiscal deficit", "trade", "market", "RBI", "Fed"]
-            
             highlighted = highlight_keywords(full_insight, keywords)
             st.markdown(highlighted)
 
